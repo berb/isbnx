@@ -47,8 +47,10 @@ foreach my $arg(@ARGV)
 			if ($isbn ne "0")
 			{
 				say "$file har ISBN: $isbn\n";
-				lookupandmark($file, $isbn);
-				move($file,$dir);
+				if(lookupandmark($file, $isbn))
+				{
+					move($file,$dir);
+				}
 			}
 			else
 			{
