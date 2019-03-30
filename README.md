@@ -1,5 +1,6 @@
 # isbnx
-##Extracts ISBN numbers from PDF files. Very experimental.
+## Extracts ISBN numbers from PDF files. Very experimental.  
+
 This program tries to extract a ISBN number from each PDF file. Then it downloads metadata 
 associated with the ISBN number and tags the pdf file with it.  
 
