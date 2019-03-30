@@ -15,12 +15,21 @@
 use warnings;
 use strict;
 use v5.10;
+use English;
 use File::Glob ':glob';
 use Business::ISBN;
 use File::Copy;
-	
-die "Filenames cannot contain any of the following characters: \\ \/ \: \< \> \| \"\nThe input filenames must reside in the current directory.\n" if ("@ARGV"=~/\\|\/|\:|\<|\>|\||\"/);
+use List::MoreUtils qw(natatime);
+use Getopt::Long;
+use POSIX;
+#use Forks::Super;
+#use Forks::Super MAX_PROC => 5, DEBUG => 1;
 
+my $cmdline="start $PROGRAM_NAME";
+
+die "Filenames cannot contain any of the following characters: \\ \/ \: \< \> \| \"\nThe input filenames must reside in the current directory.\n" if ("@ARGV"=~/\\|\/|\:|\<|\>|\||\"/);
+my $proc=1;
+GetOptions ('proc=i' => \$proc);
 
 foreach my $arg(@ARGV)
 { 
@@ -31,39 +40,64 @@ foreach my $arg(@ARGV)
 		{	# Push each matching file back in the argument list.
 			push @ARGV, $list;
 		}
-	} else
+	}
+}
+@ARGV = grep {!/\*|\?/} @ARGV; #remove the wildard files
+
+
+# my $val_args;
+
+if ($proc > 1) # Multiple processes?
+{
+	my $argv_len=@ARGV;
+	my $it = natatime POSIX::ceil($argv_len/$proc), @ARGV;
+	my @vals;
+	while (@vals = $it->())
 	{
-		my $dir="_ISBNX_complete";
-		mkdir $dir;
-		my $file=$arg;
-		my $isbn;
+		#say @vals;
+		# print "$argv_len ". POSIX::ceil($argv_len/$proc)." @vals\n";
+		
+		my $val_args = join("\" \"", @vals);
+		say "$cmdline \"$val_args\"\n";
+		system("$cmdline \"$val_args\"");
+	}
+	die "Parent exiting...";
+}
+
+foreach my $arg(@ARGV)
+{ 
+	my $dir="_ISBNX_complete";
+	mkdir $dir;
+	my $file=$arg;
+	my $isbn;
 #			say "\$isbn=extractisbn($file)";
-		$isbn=extractisbn($file);
+	$isbn=extractisbn($file);
+	say "\$isbn = $isbn";
+	if ($isbn ne "0") 
+	{
+		# $isbn=verifyisbn($isbn);
 		say "\$isbn = $isbn";
-		if ($isbn ne "0") 
+		if ($isbn ne "0")
 		{
-			# $isbn=verifyisbn($isbn);
-			say "\$isbn = $isbn";
-			if ($isbn ne "0")
+			say "$file har ISBN: $isbn\n";
+			if(lookupandmark($file, $isbn))
 			{
-				say "$file har ISBN: $isbn\n";
-				if(lookupandmark($file, $isbn))
-				{
-					move($file,$dir);
-				}
-			}
-			else
-			{
-				say "$file har ingen ISBN!\n";
+				move($file,$dir);
 			}
 		}
 		else
 		{
 			say "$file har ingen ISBN!\n";
 		}
-		
+	}
+	else
+	{
+		say "$file har ingen ISBN!\n";
 	}
 }
+print "Finished. Press Enter to continue...";
+<STDIN>;
+
 sub extractisbn
 {
 	my ($f) = @_;
@@ -161,12 +195,13 @@ sub verifyisbn
 }
 sub lookupandmark
 {
+	my $tempfilename="temp_$PID.txt";
 	my($f, $i) = @_;
 #	say "fetch-ebook-metadata -i $i";
-	if ( system("fetch-ebook-metadata -i $i -o >temp.txt") == 0 )
+	if ( system("fetch-ebook-metadata -i $i -o >$tempfilename") == 0 )
 	{
-		system("ebook-meta \"$f\" --isbn $i --from-opf temp.txt");
-		unlink "temp.txt" or warn "Could not unlink temp.txt: $!";
+		system("ebook-meta \"$f\" --isbn $i --from-opf $tempfilename");
+		unlink "$tempfilename" or warn "Could not unlink $tempfilename: $!";
 		return 1;
 	}
 	else
