@@ -4,7 +4,7 @@
 This program tries to extract a ISBN number from each PDF file in the current directory. It downloads metadata 
 associated with the ISBN number and tags the pdf file with it. Then it moves the processed file to the "_ISBNX_complete" subdirectory.
 
-You can process the files in parallell by using the --proc option. 
+You can process the files in parallel by using the --proc option. 
 
 	isbnx.pl [--proc NUMBER_OF_PROCESSES] <filename> [filename2 [...]] 
 

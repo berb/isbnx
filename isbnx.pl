@@ -1,14 +1,19 @@
 #! /usr/bin/perl
 #
-# isbnx.pl <filename> [filename2 [...]] 
-# This program tries to extract a ISBN number from each PDF file. Then it downloads metadata 
-# associated with the ISBN number and tags the pdf file with it. 
+# isbnx.pl [--proc NUMBER_OF_PROCESSES] <filename> [filename2 [...]] 
 #
-# Needs to be in path: 
-#                      pdftotext (Xpdf command line tools, https://www.xpdfreader.com/download.html)
-#                      pdfinfo, fetch-ebook-metadata, ebook-meta (Included with Calibre, https://calibre-ebook.com/download)
+# This program tries to extract a ISBN number from each PDF file in the current directory. 
+# It downloads metadata associated with the ISBN number and tags the pdf file with it. 
+# Then it moves the processed file to the "_ISBNX_complete" subdirectory.
 #
-# Tested with:  ActivePerl v5.26.3 on MS Windows 8.1.
+# You can process the files in parallel by using the --proc option.
+# Example:
+# 	isbnx.pl --proc 5 *.pdf
+#
+# Needs to be in path:
+# 	pdftotext (Xpdf command line tools, https://www.xpdfreader.com/download.html)
+# 	pdfinfo, fetch-ebook-metadata, ebook-meta (Included with Calibre, https://calibre-ebook.com/download)
+# Tested with: ActivePerl v5.26.3 on MS Windows 8.1. It can be made to work on Unix/Linux with some small modifications.
 #
 
 
@@ -22,8 +27,6 @@ use File::Copy;
 use List::MoreUtils qw(natatime);
 use Getopt::Long;
 use POSIX;
-#use Forks::Super;
-#use Forks::Super MAX_PROC => 5, DEBUG => 1;
 
 my $cmdline="start $PROGRAM_NAME";
 
@@ -43,9 +46,6 @@ foreach my $arg(@ARGV)
 	}
 }
 @ARGV = grep {!/\*|\?/} @ARGV; #remove the wildard files
-
-
-# my $val_args;
 
 if ($proc > 1) # Multiple processes?
 {
@@ -72,14 +72,14 @@ foreach my $arg(@ARGV)
 	my $isbn;
 #			say "\$isbn=extractisbn($file)";
 	$isbn=extractisbn($file);
-	say "\$isbn = $isbn";
+#	say "\$isbn = $isbn";
 	if ($isbn ne "0") 
 	{
 		# $isbn=verifyisbn($isbn);
-		say "\$isbn = $isbn";
+#		say "\$isbn = $isbn";
 		if ($isbn ne "0")
 		{
-			say "$file har ISBN: $isbn\n";
+			say "$file has ISBN: $isbn\n";
 			if(lookupandmark($file, $isbn))
 			{
 				move($file,$dir);
@@ -87,12 +87,12 @@ foreach my $arg(@ARGV)
 		}
 		else
 		{
-			say "$file har ingen ISBN!\n";
+			say "$file has no ISBN!\n";
 		}
 	}
 	else
 	{
-		say "$file har ingen ISBN!\n";
+		say "$file has no ISBN!\n";
 	}
 }
 print "Finished. Press Enter to continue...";
@@ -142,35 +142,6 @@ sub extractisbn
 	return 0;
 }
 
-	
-#	say $+{isbn};
-	# my $ex_isbn = $+{isbn};
-	# unless ($ex_isbn)
-	# {
-		# $filedump=~ m/(?<isbn>[0-9\-\.–­―—\^ ]{9,28}[0-9xX])/g;
-		# $ex_isbn = $+{isbn};
-	# }
-	# unless ($ex_isbn)
-	# {
-		# my $pages=`pdfinfo "$f"`;
-		# $pages=~ m/Pages:\s*([0-9]+)/;
-		# $pages=$1;
-		# my $first=$pages-30;
-		# say "pdftotext -f $first -l $pages \"$f\" -";
-		# $filedump=`pdftotext -f $first -l $pages "$f" -`;
-		# $filedump=~ m/(?:ISBN|isbn).*?\n*?.*?(?<isbn>[0-9\-\.–­―—\^ ]{9,28}[0-9xX])/g;
-		# $ex_isbn = $+{isbn};
-		# unless ($ex_isbn)
-		# {
-			# $filedump=~ m/(?<isbn>[0-9\-\.–­―—\^]{9,28}[0-9xX])/g;
-			# $ex_isbn = $+{isbn};
-		# }
-		# unless ($ex_isbn) { return 0 };
-	# }
-	# $ex_isbn =~ s/[^0-9xX]//g;
-	# return $ex_isbn;
-# }
-
 sub verifyisbn
 {
 	my ($i) = @_;
@@ -187,10 +158,8 @@ sub verifyisbn
 	{
 		$i = substr($i, 0, 13);
 	}
-#	say "\$i = $i";
 	my $icheck = Business::ISBN->new($i);
 	unless ($icheck->is_valid) { return 0 };
- #   say "\$i is valid!";
 	return $i 
 }
 sub lookupandmark
@@ -207,8 +176,6 @@ sub lookupandmark
 	else
 	{
 		return 0;
-#		say "ingen opf";
-#		system("ebook-meta \"$f\" --isbn $i");
 	}
 	
 	
