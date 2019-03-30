@@ -9,6 +9,7 @@ You can process the files in parallell by using the --proc option.
 	isbnx.pl [--proc NUMBER_OF_PROCESSES] <filename> [filename2 [...]] 
 
 Example:
+
 	isbnx.pl --proc 5 *.pdf
 
 Needs to be in path: 
