@@ -175,6 +175,7 @@ sub lookupandmark
 	}
 	else
 	{
+		unlink "$tempfilename" or warn "Could not unlink $tempfilename: $!";
 		return 0;
 	}
 	
