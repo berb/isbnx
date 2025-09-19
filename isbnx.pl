@@ -26,7 +26,7 @@ use POSIX;
 use File::Copy;
 use File::Path qw(make_path);
 use File::Temp qw(tempfile);
-use File::Spec qw(catfile);
+use File::Spec::Functions qw(catfile);
 
 
 use List::Util qw(max);
