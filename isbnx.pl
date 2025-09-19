@@ -1,150 +1,131 @@
-#! /usr/bin/perl
+#!/usr/bin/env perl -w
 #
-# isbnx.pl [--proc NUMBER_OF_PROCESSES] <filename> [filename2 [...]] 
+# isbnx.pl [--parallel NUMBER_OF_PROCESSES] [--sleep SECONDS_TO_WAIT] [--write] [--copy] [--move] [--completed-dir <target-dir>] [--failed-dir <target-dir>] <filename> [filename2 [...]] 
 #
-# This program tries to extract a ISBN number from each PDF file in the current directory. 
-# It downloads metadata associated with the ISBN number and tags the pdf file with it. 
-# Then it moves the processed file to the "_ISBNX_complete" subdirectory.
+# This Perl script takes a set of PDF files as input and tries to extract the ISBN number from each file.
+# If successful, the ISBN number is shown for each file.
+# In addition, the script also allows the following further actions:
+#   * --parallel to allow the execution of up to  N parallel jobs
+#   * --sleep to add waiting time (in seconds) before fetching the online meta data
+#   * --write new meta data into the PDF based on online sources and by using the ISBN
+#   * --copy successfully and unsuccessfully resolved PDF files into different target folders
+#   * --move successfully and unsuccessfully resolved PDF files into different target folders
 #
-# You can process the files in parallel by using the --proc option.
-# Example:
-# 	isbnx.pl --proc 5 *.pdf
+# The target folders can be specified via --completed-dir and --failed-dir. If --copy or --move is used, the ISBN-13 identifier is used as filename.
 #
-# Needs to be in path:
-# 	pdftotext (Xpdf command line tools, https://www.xpdfreader.com/download.html)
-# 	pdfinfo, fetch-ebook-metadata, ebook-meta (Included with Calibre, https://calibre-ebook.com/download)
-# Tested with: ActivePerl v5.26.3 on MS Windows 8.1. It can be made to work on Unix/Linux with some small modifications.
+# When using this script with a large batch of PDF files, it is recommended to disable parallelism and add a sleep time to prevent rate limiting penalties.
 #
 
-
-use warnings;
 use strict;
-use v5.10;
-use English;
-use File::Glob ':glob';
-use Business::ISBN;
-use File::Copy;
-use List::MoreUtils qw(natatime);
+use warnings;
+use feature 'say';
+
+use Parallel::ForkManager;
 use Getopt::Long;
 use POSIX;
+use File::Copy;
+use File::Path qw(make_path);
+use File::Temp qw(tempfile);
+use File::Spec qw(catfile);
 
-my $cmdline="start $PROGRAM_NAME";
 
-die "Filenames cannot contain any of the following characters: \\ \/ \: \< \> \| \"\nThe input filenames must reside in the current directory.\n" if ("@ARGV"=~/\\|\/|\:|\<|\>|\||\"/);
-my $proc=1;
-GetOptions ('proc=i' => \$proc);
+use List::Util qw(max);
+use Sys::Info;
+use Business::ISBN;
 
-foreach my $arg(@ARGV)
-{ 
-	if ($arg=~/\*|\?/)
-	{	#If the shell didn't take care of the globbing, we'll have to do it manually.
-		my @star_files= bsd_glob("$arg");
-		foreach my $list(@star_files)
-		{	# Push each matching file back in the argument list.
-			push @ARGV, $list;
-		}
-	}
+use Data::Dumper qw(Dumper);
+
+# Die with a usage message if no files were provided.
+die "Usage: $0 file1.pdf [file2.pdf ...]\n" unless @ARGV;
+
+
+my $targetDirWithoutISBN = "_WITHOUT_ISBN";
+my $targetDirWithISBN = "_WITH_ISBN";
+my $parallel = max((Sys::Info->new->device( CPU => my %options )->count || 1) -1, 1); #use N-1 cores, minimum 1 times multiplier (4)
+my $moveflag = '';
+my $copyflag = '';
+my $sleep = 5;
+my $writemetadataflag = '';
+GetOptions ('parallel=i' => \$parallel,
+            'completed-dir=s' => \$targetDirWithISBN,
+            'failed-dir=s' => \$targetDirWithoutISBN,
+            'sleep=i' => \$sleep,
+            'move' => \$moveflag,
+            'copy' => \$copyflag,
+            'write' => \$writemetadataflag);
+
+if($copyflag && $moveflag){
+    die("Cannot combine copy and move flag");
+}elsif($copyflag || $moveflag){
+    unless (-d "$targetDirWithISBN"){ 
+        make_path($targetDirWithISBN) or die "Error while creating the directory for completed PDFs: $!"; 
+    }
+    unless (-d "$targetDirWithoutISBN"){ 
+        make_path($targetDirWithoutISBN) or die "Error while creating the directory for failed PDFs: $!"; 
+    }
 }
-@ARGV = grep {!/\*|\?/} @ARGV; #remove the wildard files
 
-if ($proc > 1) # Multiple processes?
-{
-	my $argv_len=@ARGV;
-	my $it = natatime POSIX::ceil($argv_len/$proc), @ARGV;
-	my @vals;
-	while (@vals = $it->())
-	{
-		#say @vals;
-		# print "$argv_len ". POSIX::ceil($argv_len/$proc)." @vals\n";
-		
-		my $val_args = join("\" \"", @vals);
-		say "$cmdline \"$val_args\"\n";
-		system("$cmdline \"$val_args\"");
-	}
-	die "Parent exiting...";
+
+my $manager = Parallel::ForkManager->new($parallel);    #2 concurrent
+
+PDFs: foreach my $file (@ARGV) {
+    unless (-f $file && -r _) {
+        warn "Skipping '$file': not a readable file.\n";
+        next PDFs;
+    }
+    sleep(5);
+    $manager->start and next PDFs;
+    my ($isbn) = _extract_isbn($file);
+    if($isbn){
+        say "[$isbn] ".$file;
+        if($writemetadataflag){
+            if(_update_meta_data($file,$isbn)){
+
+            }
+            else{
+                warn "Error while updating meta data of $file.";
+            }
+        }
+        if($moveflag){
+            move($file, File::Spec->catfile($targetDirWithISBN,$isbn.".pdf"));
+        }elsif($copyflag){
+            copy($file, File::Spec->catfile($targetDirWithISBN,$isbn.".pdf"));
+        }
+    } else {
+        say "[???-?-?????-???-?] ".$file;
+        if($moveflag){
+            move($file, $targetDirWithoutISBN)
+        }elsif($copyflag){
+            copy($file, $targetDirWithoutISBN)
+        }
+
+    }
+    $manager->finish;
 }
+$manager->wait_all_children;
 
-foreach my $arg(@ARGV)
-{ 
-	my $dir="_ISBNX_complete";
-	mkdir $dir;
-	my $file=$arg;
-	my $isbn;
-#			say "\$isbn=extractisbn($file)";
-	$isbn=extractisbn($file);
-#	say "\$isbn = $isbn";
-	if ($isbn ne "0") 
-	{
-		# $isbn=verifyisbn($isbn);
-#		say "\$isbn = $isbn";
-		if ($isbn ne "0")
-		{
-			say "$file has ISBN: $isbn\n";
-			if(lookupandmark($file, $isbn))
-			{
-				move($file,$dir);
-			}
-		}
-		else
-		{
-			say "$file has no ISBN!\n";
-		}
-	}
-	else
-	{
-		say "$file has no ISBN!\n";
-	}
-}
-print "Finished. Press Enter to continue...";
-<STDIN>;
 
-sub extractisbn
-{
-	my ($f) = @_;
-	my $regex1=qr/(?:ISBN|isbn).*?\n*?.*?(?<isbn>[0-9\-\.–­―—\^ ]{9,28}[0-9xX])/;
+sub _extract_isbn{
+    my ($file) = @_;
+	my $regex1=qr/(?:ISBN\-13|ISBN13|ISBN\-10|ISBN10|ISBN|isbn).*?\n*?.*?(?<isbn>[0-9\-\.–­―—\^ ]{9,28}[0-9xX])/;
 	my $regex2=qr/(?<isbn>[0-9\-\.–­―—\^ ]{9,28}[0-9xX])/;
 	my $ex_isbn;
-#	say "\$f= $f";
 
-#	say "$f har $pages sidor";
-	say "pdftotext -f 1 -l 30 \"$f\" -";
-	my $filedump=`pdftotext -f 1 -l 30 "$f" -`;
-	while ($filedump=~ m/$regex1/g)
-	{	
-		#say "\$+{isbn} = $+{isbn}";
-		$ex_isbn = verifyisbn($+{isbn});
-		if ($ex_isbn) { return $ex_isbn; }
-	}
-#	while ($filedump=~ m/(?<isbn>[0-9\-\.–­―—\^ ]{9,28}[0-9xX])/g)
-	while ($filedump =~ m/$regex2/g)
-	{
-		#say "\$+{isbn} = $+{isbn}";
-		$ex_isbn = verifyisbn($+{isbn});
-		if ($ex_isbn) { return $ex_isbn; }
-	}
-
-	my $pages=`pdfinfo "$f"`;
-	$pages=~ m/Pages:\s*([0-9]+)/;
-	$pages=$1;
-	my $first=$pages-30;
-	say "pdftotext -f $first -l $pages \"$f\" -";
-	$filedump=`pdftotext -f $first -l $pages "$f" -`;
-	while ($filedump=~ m/$regex1/g)
-	{
-		$ex_isbn = verifyisbn($+{isbn});
-		if ($ex_isbn) { return $ex_isbn; }
-	}
-	while ($filedump=~ m/$regex2/g)
-	{
-		$ex_isbn = verifyisbn($+{isbn});
-		if ($ex_isbn) { return $ex_isbn; }
-	}
-	return 0;
+	my $pdftext=`pdftotext -f 1 -l 16 "$file" - 2>/dev/null`;
+    for my $regex ($regex1, $regex2){
+        while ($pdftext=~ m/$regex/g)
+        {	
+            my $extracted_isbn = _verify_isbn($+{isbn});
+            if ($extracted_isbn) { 
+                return $extracted_isbn; 
+            }			
+        }
+    }
+    return 0;
 }
 
-sub verifyisbn
-{
-	my ($i) = @_;
+sub _verify_isbn{
+    my ($i) = @_;
 	$i =~ s/[^0-9xX]//g;
 	if (length($i) < 10) 
 	{ 
@@ -158,26 +139,25 @@ sub verifyisbn
 	{
 		$i = substr($i, 0, 13);
 	}
-	my $icheck = Business::ISBN->new($i);
-	unless ($icheck->is_valid) { return 0 };
-	return $i 
-}
-sub lookupandmark
-{
-	my $tempfilename="temp_$PID.txt";
-	my($f, $i) = @_;
-#	say "fetch-ebook-metadata -i $i";
-	if ( system("fetch-ebook-metadata -i $i -o >$tempfilename") == 0 )
-	{
-		system("ebook-meta \"$f\" --isbn $i --from-opf $tempfilename");
-		unlink "$tempfilename" or warn "Could not unlink $tempfilename: $!";
-		return 1;
-	}
-	else
-	{
-		unlink "$tempfilename" or warn "Could not unlink $tempfilename: $!";
+
+    my $icheck = Business::ISBN->new($i) or return 0;
+	unless ($icheck->is_valid || $icheck->error == -3) { 
 		return 0;
-	}
-	
-	
+	};
+    return $icheck->as_isbn13->as_string;
+}
+
+sub _update_meta_data{
+    my($file, $isbn) = @_;
+    my ($tfh, $tmpfile) = tempfile();
+    #say $tmpfile;
+
+    if(system("fetch-ebook-metadata --isbn=$isbn --opf >$tmpfile 2> /dev/null") == 0){
+        system("ebook-meta \"$file\" --isbn $isbn --from-opf $tmpfile 1> /dev/null 2> /dev/null");
+		unlink "$tmpfile" or warn "Could not unlink $tmpfile: $!";
+        return 1;        
+    } else {
+		unlink "$tmpfile" or warn "Could not unlink $tmpfile: $!";
+        return 0;
+    }
 }
