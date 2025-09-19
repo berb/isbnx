@@ -44,7 +44,7 @@ my $targetDirWithISBN = "_WITH_ISBN";
 my $parallel = max((Sys::Info->new->device( CPU => my %options )->count || 1) -1, 1); #use N-1 cores, minimum 1 times multiplier (4)
 my $moveflag = '';
 my $copyflag = '';
-my $sleep = 5;
+my $sleep = 0;
 my $writemetadataflag = '';
 GetOptions ('parallel=i' => \$parallel,
             'completed-dir=s' => \$targetDirWithISBN,
@@ -73,12 +73,12 @@ PDFs: foreach my $file (@ARGV) {
         warn "Skipping '$file': not a readable file.\n";
         next PDFs;
     }
-    sleep(5);
     $manager->start and next PDFs;
     my ($isbn) = _extract_isbn($file);
     if($isbn){
         say "[$isbn] ".$file;
         if($writemetadataflag){
+            sleep($sleep);
             if(_update_meta_data($file,$isbn)){
 
             }
