@@ -44,6 +44,7 @@ The target folders can be specified via `--completed-dir` and `--failed-dir`. If
 The following dependencies are required on a Debian/Ubuntu-based system:
 
  * `libparallel-forkmanager-perl`
+ * `libfile-slurp-perl`
  * `libsys-info-perl`
  * `libbusiness-isbn-perl`
  * `poppler-utils` (for `pdftotext`)
