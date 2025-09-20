@@ -1,19 +1,33 @@
 #!/usr/bin/env perl -w
 #
-# isbnx.pl [--parallel NUMBER_OF_PROCESSES] [--sleep SECONDS_TO_WAIT] [--write] [--copy] [--move] [--completed-dir <target-dir>] [--failed-dir <target-dir>] <filename> [filename2 [...]] 
+# isbnx.pl 
+#       [--parallel NUMBER_OF_PROCESSES] 
+#       [--sleep SECONDS_TO_WAIT] 
+#       [--write] 
+#       [--copy] 
+#       [--move] 
+#       [--rename] 
+#       [--completed-dir <target-dir>] 
+#       [--failed-dir <target-dir>] 
+#       <filename> [filename2 [...]] 
 #
-# This Perl script takes a set of PDF files as input and tries to extract the ISBN number from each file.
-# If successful, the ISBN number is shown for each file.
-# In addition, the script also allows the following further actions:
-#   * --parallel to allow the execution of up to  N parallel jobs
-#   * --sleep to add waiting time (in seconds) before fetching the online meta data
-#   * --write new meta data into the PDF based on online sources and by using the ISBN
-#   * --copy successfully and unsuccessfully resolved PDF files into different target folders
-#   * --move successfully and unsuccessfully resolved PDF files into different target folders
 #
-# The target folders can be specified via --completed-dir and --failed-dir. If --copy or --move is used, the ISBN-13 identifier is used as filename.
+# This Perl script takes a set of ebook files as input and tries to extract 
+# the ISBN number from each file. If successful, the ISBN number is shown for
+# each file. In addition, the script also allows the following further actions:
+#  --parallel to allow the execution of up to  N parallel jobs
+#  --sleep to add waiting time (in seconds) before fetching the online meta data
+#  --write new meta data into the book file based on online sources and by using the ISBN
+#  --copy successfully and unsuccessfully resolved book files into different target folders
+#  --move successfully and unsuccessfully resolved book files into different target folders
+#  --rename successfully resolved file in-place 
 #
-# When using this script with a large batch of PDF files, it is recommended to disable parallelism and add a sleep time to prevent rate limiting penalties.
+# The target folders can be specified via --completed-dir and --failed-dir. 
+# If --copy or --move is used, the ISBN-13 identifier is used as filename.
+#
+# It is recommended to disable parallelism and set the sleep parameter to 
+# prevent rate limiting penalties when using this script with large batches of
+# book files if also online meta data fetching (--write) is enabled. 
 #
 
 use strict;
@@ -27,7 +41,8 @@ use File::Copy;
 use File::Path qw(make_path);
 use File::Temp qw(tempfile);
 use File::Spec::Functions qw(catfile);
-
+use File::Basename;
+use File::Slurp;
 
 use List::Util qw(max);
 use Sys::Info;
@@ -36,7 +51,7 @@ use Business::ISBN;
 use Data::Dumper qw(Dumper);
 
 # Die with a usage message if no files were provided.
-die "Usage: $0 file1.pdf [file2.pdf ...]\n" unless @ARGV;
+die "Usage: $0 file1.pdf [file2.pdf ...]\n" unless @ARGV; #TODO
 
 
 my $targetDirWithoutISBN = "_WITHOUT_ISBN";
@@ -44,6 +59,7 @@ my $targetDirWithISBN = "_WITH_ISBN";
 my $parallel = max((Sys::Info->new->device( CPU => my %options )->count || 1) -1, 1); #use N-1 cores, minimum 1 times multiplier (4)
 my $moveflag = '';
 my $copyflag = '';
+my $renameflag = '';
 my $sleep = 0;
 my $writemetadataflag = '';
 GetOptions ('parallel=i' => \$parallel,
@@ -52,10 +68,15 @@ GetOptions ('parallel=i' => \$parallel,
             'sleep=i' => \$sleep,
             'move' => \$moveflag,
             'copy' => \$copyflag,
+            'rename' => \$renameflag,
             'write' => \$writemetadataflag);
 
 if($copyflag && $moveflag){
     die("Cannot combine copy and move flag");
+}elsif($copyflag && $renameflag){
+    die("Cannot combine copy and inplace flag");
+}elsif($moveflag && $renameflag){
+    die("Cannot combine move and inplace flag");
 }elsif($copyflag || $moveflag){
     unless (-d "$targetDirWithISBN"){ 
         make_path($targetDirWithISBN) or die "Error while creating the directory for completed PDFs: $!"; 
@@ -66,20 +87,26 @@ if($copyflag && $moveflag){
 }
 
 
-my $manager = Parallel::ForkManager->new($parallel);    #2 concurrent
+my $manager = Parallel::ForkManager->new($parallel);    
 
-PDFs: foreach my $file (@ARGV) {
+Books: foreach my $file (@ARGV) {
     unless (-f $file && -r _) {
         warn "Skipping '$file': not a readable file.\n";
-        next PDFs;
+        next Books;
     }
-    $manager->start and next PDFs;
-    my ($isbn) = _extract_isbn($file);
+    unless ($file =~ /\.pdf$/i || $file =~ /\.epub$/i) {
+        warn "Skipping '$file': has not a support file format.\n";
+        next Books;
+    }
+    my @exts = qw(.pdf .epub);
+    $manager->start and next Books;
+    my ($name, $dir, $ext) = fileparse($file, @exts);
+    my ($isbn) = _extract_isbn($file, $ext);
     if($isbn){
         say "[$isbn] ".$file;
         if($writemetadataflag){
             sleep($sleep);
-            if(_update_meta_data($file,$isbn)){
+            if(_update_meta_data($file, $ext, $isbn)){
 
             }
             else{
@@ -87,9 +114,11 @@ PDFs: foreach my $file (@ARGV) {
             }
         }
         if($moveflag){
-            move($file, File::Spec->catfile($targetDirWithISBN,$isbn.".pdf"));
+            move($file, File::Spec->catfile($targetDirWithISBN,$isbn.$ext));
         }elsif($copyflag){
-            copy($file, File::Spec->catfile($targetDirWithISBN,$isbn.".pdf"));
+            copy($file, File::Spec->catfile($targetDirWithISBN,$isbn.$ext));
+        }elsif($renameflag){
+            move($file, File::Spec->catfile(dirname($file),$isbn.$ext));
         }
     } else {
         say "[???-?-?????-???-?] ".$file;
@@ -106,14 +135,27 @@ $manager->wait_all_children;
 
 
 sub _extract_isbn{
-    my ($file) = @_;
+    my ($file,$ext) = @_;
 	my $regex1=qr/(?:ISBN\-13|ISBN13|ISBN\-10|ISBN10|ISBN|isbn).*?\n*?.*?(?<isbn>[0-9\-\.–­―—\^ ]{9,28}[0-9xX])/;
 	my $regex2=qr/(?<isbn>[0-9\-\.–­―—\^ ]{9,28}[0-9xX])/;
 	my $ex_isbn;
 
-	my $pdftext=`pdftotext -f 1 -l 16 "$file" - 2>/dev/null`;
+    my $booktext  = '';
+    if($ext =~ /\.pdf$/i){
+    	$booktext=`pdftotext -f 1 -l 16 "$file" - 2>/dev/null`;
+    } elsif($ext =~ /\.epub$/i){
+        my ($tfh, $tmpfile) = tempfile(SUFFIX => ".txt");        
+        if(system("ebook-convert $file $tmpfile 1> /dev/null 2> /dev/null") == 0){
+            $booktext = read_file($tmpfile);
+            unlink "$tmpfile" or warn "Could not unlink $tmpfile: $!";            
+        }else{
+            unlink "$tmpfile" or warn "Could not unlink $tmpfile: $!";            
+            return 0;
+        }
+    }
+
     for my $regex ($regex1, $regex2){
-        while ($pdftext=~ m/$regex/g)
+        while ($booktext=~ m/$regex/g)
         {	
             my $extracted_isbn = _verify_isbn($+{isbn});
             if ($extracted_isbn) { 
@@ -148,7 +190,7 @@ sub _verify_isbn{
 }
 
 sub _update_meta_data{
-    my($file, $isbn) = @_;
+    my($file, $ext, $isbn) = @_;
     my ($tfh, $tmpfile) = tempfile();
     #say $tmpfile;
 
