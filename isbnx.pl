@@ -145,7 +145,7 @@ sub _extract_isbn{
     	$booktext=`pdftotext -f 1 -l 16 "$file" - 2>/dev/null`;
     } elsif($ext =~ /\.epub$/i){
         my ($tfh, $tmpfile) = tempfile(SUFFIX => ".txt");        
-        if(system("ebook-convert $file $tmpfile 1> /dev/null 2> /dev/null") == 0){
+        if(system("ebook-convert \"$file\" \"$tmpfile\" 1> /dev/null 2> /dev/null") == 0){
             $booktext = read_file($tmpfile);
             unlink "$tmpfile" or warn "Could not unlink $tmpfile: $!";            
         }else{
